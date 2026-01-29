@@ -600,35 +600,37 @@ impl<S: TransactionSigner> OstiumClient<S> {
             .context("Failed to get current epoch")?;
         let current_epoch = IOstiumVault::currentEpochCall::abi_decode_returns(&epoch_result)?;
 
-        // Get epoch end
-        let end_call = IOstiumVault::currentEpochEndCall {};
-        let end_result: Bytes = self
+        // Get epoch start timestamp
+        let start_call = IOstiumVault::currentEpochStartCall {};
+        let start_result: Bytes = self
             .provider
             .call(
                 alloy::rpc::types::TransactionRequest::default()
                     .with_to(vault)
-                    .with_input(end_call.abi_encode()),
+                    .with_input(start_call.abi_encode()),
             )
             .await
-            .context("Failed to get epoch end")?;
-        let epoch_end = IOstiumVault::currentEpochEndCall::abi_decode_returns(&end_result)?;
+            .context("Failed to get epoch start")?;
+        let epoch_start: u64 = IOstiumVault::currentEpochStartCall::abi_decode_returns(&start_result)?
+            .try_into()
+            .unwrap_or(0);
 
-        // Check if withdrawals are open
-        let open_call = IOstiumVault::withdrawalsOpenCall {};
-        let open_result: Bytes = self
-            .provider
-            .call(
-                alloy::rpc::types::TransactionRequest::default()
-                    .with_to(vault)
-                    .with_input(open_call.abi_encode()),
-            )
-            .await
-            .context("Failed to check withdrawals open")?;
-        let withdrawals_open = IOstiumVault::withdrawalsOpenCall::abi_decode_returns(&open_result)?;
+        // Calculate epoch end (each epoch is 72 hours = 259200 seconds)
+        const EPOCH_DURATION: u64 = 72 * 60 * 60; // 72 hours in seconds
+        let epoch_end = epoch_start + EPOCH_DURATION;
+
+        // Calculate if withdrawals are open (first 48 hours of each epoch)
+        const WITHDRAWAL_WINDOW: u64 = 48 * 60 * 60; // 48 hours in seconds
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let withdrawals_open = now < epoch_start + WITHDRAWAL_WINDOW;
 
         Ok(VaultEpoch {
             current_epoch: current_epoch.try_into().unwrap_or(0),
-            epoch_end_timestamp: epoch_end.try_into().unwrap_or(0),
+            epoch_start_timestamp: epoch_start,
+            epoch_end_timestamp: epoch_end,
             withdrawals_open,
         })
     }

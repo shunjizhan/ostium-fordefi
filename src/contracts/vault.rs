@@ -107,14 +107,8 @@ sol! {
         /// Current epoch number
         function currentEpoch() external view returns (uint256);
 
-        /// Check if withdrawals are open
-        function withdrawalsOpen() external view returns (bool);
-
         /// Get pending withdrawal request shares for an address at a specific epoch
         function withdrawRequests(address owner, uint16 withdrawEpoch) external view returns (uint256);
-
-        /// Get current epoch end timestamp
-        function currentEpochEnd() external view returns (uint256);
 
         /// Get current epoch start timestamp
         function currentEpochStart() external view returns (uint256);

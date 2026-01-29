@@ -132,9 +132,11 @@ impl VaultPosition {
 pub struct VaultEpoch {
     /// Current epoch number
     pub current_epoch: u64,
+    /// Epoch start timestamp (Unix timestamp)
+    pub epoch_start_timestamp: u64,
     /// Epoch end timestamp (Unix timestamp)
     pub epoch_end_timestamp: u64,
-    /// Whether withdrawals are currently open
+    /// Whether withdrawals are currently open (first 48h of epoch)
     pub withdrawals_open: bool,
 }
 

@@ -52,5 +52,5 @@ name = "vault_deposit"
 path = "examples/vault_deposit.rs"
 
 [[example]]
-name = "interactive"
-path = "examples/interactive.rs"
+name = "flow"
+path = "examples/flow.rs"
