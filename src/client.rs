@@ -5,8 +5,8 @@ use crate::constants::scale_usdc;
 use crate::contracts::{IERC20, IOstiumVault, ITrading, ITradingStorage};
 use crate::signer::{TransactionSigner, TxRequest};
 use crate::types::{
-    BuilderFeeParams, CloseTradeParams, DepositParams, PlaceOrderParams, Position, RedeemParams,
-    VaultEpoch, VaultPosition, WithdrawParams, trade::u256_to_u192,
+    BuilderFeeParams, CloseTradeParams, DepositParams, PlaceOrderParams, Position,
+    VaultEpoch, VaultPosition,
 };
 use alloy::network::{Ethereum, TransactionBuilder};
 use alloy::primitives::{Address, Bytes, TxHash, U256};
@@ -86,12 +86,6 @@ impl<S: TransactionSigner> OstiumClient<S> {
             .context("Failed to decode balance")?;
 
         Ok(decoded)
-    }
-
-    /// Approve token spending
-    pub async fn approve_usdc(&self, spender: Address, amount: f64) -> Result<TxHash> {
-        self.approve_token(self.config.usdc, spender, scale_usdc(amount))
-            .await
     }
 
     /// Approve token spending (raw amount)
@@ -215,73 +209,11 @@ impl<S: TransactionSigner> OstiumClient<S> {
             .context("Failed to close trade")
     }
 
-    /// Cancel an open limit order
-    pub async fn cancel_order(&self, pair_index: u16, trade_index: u8) -> Result<TxHash> {
-        let call = ITrading::cancelOpenLimitOrderCall {
-            pairIndex: pair_index,
-            index: trade_index,
-        };
-        let data = Bytes::from(call.abi_encode());
-
-        let tx = TxRequest::new(self.config.trading, data);
-        self.signer
-            .sign_and_send(tx)
-            .await
-            .context("Failed to cancel order")
-    }
-
-    /// Update take profit price
-    pub async fn update_take_profit(
-        &self,
-        pair_index: u16,
-        trade_index: u8,
-        new_tp: f64,
-    ) -> Result<TxHash> {
-        let tp_scaled = u256_to_u192(crate::constants::scale_price(new_tp));
-
-        let call = ITrading::updateTpCall {
-            pairIndex: pair_index,
-            index: trade_index,
-            newTp: tp_scaled,
-        };
-        let data = Bytes::from(call.abi_encode());
-
-        let tx = TxRequest::new(self.config.trading, data);
-        self.signer
-            .sign_and_send(tx)
-            .await
-            .context("Failed to update take profit")
-    }
-
-    /// Update stop loss price
-    pub async fn update_stop_loss(
-        &self,
-        pair_index: u16,
-        trade_index: u8,
-        new_sl: f64,
-    ) -> Result<TxHash> {
-        let sl_scaled = u256_to_u192(crate::constants::scale_price(new_sl));
-
-        let call = ITrading::updateSlCall {
-            pairIndex: pair_index,
-            index: trade_index,
-            newSl: sl_scaled,
-        };
-        let data = Bytes::from(call.abi_encode());
-
-        let tx = TxRequest::new(self.config.trading, data);
-        self.signer
-            .sign_and_send(tx)
-            .await
-            .context("Failed to update stop loss")
-    }
-
     // ========== Position Queries (Direct Contract Calls) ==========
 
     /// Get all open positions for an address directly from TradingStorage contract
     ///
-    /// This is an alternative to subgraph queries when the subgraph is unavailable.
-    /// It iterates through all trading pairs to find open positions.
+    /// Iterates through all trading pairs to find open positions.
     ///
     /// # Arguments
     ///
@@ -452,63 +384,6 @@ impl<S: TransactionSigner> OstiumClient<S> {
             .context("Failed to deposit to vault")
     }
 
-    /// Withdraw USDC from OLP vault
-    ///
-    /// # Arguments
-    ///
-    /// * `params` - Withdraw parameters
-    ///
-    /// # Returns
-    ///
-    /// Transaction hash of the withdrawal
-    pub async fn withdraw_olp(&self, params: WithdrawParams) -> Result<TxHash> {
-        let vault = self
-            .config
-            .vault
-            .ok_or_else(|| eyre::eyre!("Vault address not configured"))?;
-
-        let amount = params.scaled_amount();
-        let receiver = params.receiver.unwrap_or_else(|| self.address());
-        let owner = self.address();
-
-        let call = IOstiumVault::withdrawCall {
-            assets: amount,
-            receiver,
-            owner,
-        };
-        let data = Bytes::from(call.abi_encode());
-
-        let tx = TxRequest::new(vault, data);
-        self.signer
-            .sign_and_send(tx)
-            .await
-            .context("Failed to withdraw from vault")
-    }
-
-    /// Redeem OLP shares for USDC
-    pub async fn redeem_olp(&self, params: RedeemParams) -> Result<TxHash> {
-        let vault = self
-            .config
-            .vault
-            .ok_or_else(|| eyre::eyre!("Vault address not configured"))?;
-
-        let receiver = params.receiver.unwrap_or_else(|| self.address());
-        let owner = self.address();
-
-        let call = IOstiumVault::redeemCall {
-            shares: params.shares,
-            receiver,
-            owner,
-        };
-        let data = Bytes::from(call.abi_encode());
-
-        let tx = TxRequest::new(vault, data);
-        self.signer
-            .sign_and_send(tx)
-            .await
-            .context("Failed to redeem from vault")
-    }
-
     /// Get OLP share balance
     pub async fn get_olp_balance(&self) -> Result<VaultPosition> {
         let vault = self
@@ -666,6 +541,69 @@ impl<S: TransactionSigner> OstiumClient<S> {
 
         let shares = IOstiumVault::withdrawRequestsCall::abi_decode_returns(&result)?;
         Ok(shares)
+    }
+
+    // ========== Auto-Withdraw Operations ==========
+
+    /// Approve OLP shares for the auto-withdraw contract
+    ///
+    /// This allows the auto-withdraw contract to automatically process withdrawals
+    /// on your behalf when the withdrawal epoch opens.
+    ///
+    /// # Arguments
+    ///
+    /// * `shares` - Amount of OLP shares to approve (raw value with 6 decimals)
+    ///
+    /// # Returns
+    ///
+    /// Transaction hash of the approval
+    pub async fn approve_auto_withdraw(&self, shares: U256) -> Result<TxHash> {
+        let vault = self
+            .config
+            .vault
+            .ok_or_else(|| eyre::eyre!("Vault address not configured"))?;
+
+        let auto_withdraw = self
+            .config
+            .auto_withdraw
+            .ok_or_else(|| eyre::eyre!("Auto-withdraw address not configured"))?;
+
+        // Approve OLP tokens (vault is the OLP token) to the auto-withdraw contract
+        self.approve_token(vault, auto_withdraw, shares).await
+    }
+
+    /// Get current OLP allowance for the auto-withdraw contract
+    pub async fn get_auto_withdraw_allowance(&self) -> Result<U256> {
+        let vault = self
+            .config
+            .vault
+            .ok_or_else(|| eyre::eyre!("Vault address not configured"))?;
+
+        let auto_withdraw = self
+            .config
+            .auto_withdraw
+            .ok_or_else(|| eyre::eyre!("Auto-withdraw address not configured"))?;
+
+        let call = IERC20::allowanceCall {
+            owner: self.address(),
+            spender: auto_withdraw,
+        };
+        let data = call.abi_encode();
+
+        let result: Bytes = self
+            .provider
+            .call(
+                alloy::rpc::types::TransactionRequest::default()
+                    .with_to(vault)
+                    .with_input(data),
+            )
+            .await
+            .context("Failed to check OLP allowance")?;
+
+        let decoded = IERC20::allowanceCall::abi_decode_returns(&result)
+            .context("Failed to decode allowance")?;
+
+        Ok(decoded)
     }
 
     // ========== Utility Methods ==========

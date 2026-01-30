@@ -1,15 +1,17 @@
-//! Interactive CLI for Ostium SDK
+//! Interactive CLI for Ostium SDK with Fordefi MPC signing
 //!
 //! Run with: cargo run --example flow
 //!
 //! Environment variables:
-//! - For local signer: PRIVATE_KEY
-//! - For Fordefi signer: FORDEFI_JWT_TOKEN, FORDEFI_PRIVATE_KEY, FORDEFI_ADDRESS
+//! - ALCHEMY_API_KEY: Alchemy API key for Arbitrum RPC
+//! - FORDEFI_JWT_TOKEN: Fordefi API JWT token
+//! - FORDEFI_PRIVATE_KEY_PATH: Path to P-256 private key PEM file (default: keys/pk.pem)
+//! - FORDEFI_ADDRESS: Wallet address (optional, auto-discovered if not set)
 
 use std::io::{self, Write};
 
 use ostium_sdk::{
-    get_btc_price, get_eth_price, CloseTradeParams, DepositParams, FordefiSigner, LocalSigner,
+    get_btc_price, get_eth_price, CloseTradeParams, DepositParams, FordefiSigner,
     NetworkConfig, OstiumClient, PlaceOrderParams, Position, TransactionSigner,
 };
 
@@ -22,33 +24,13 @@ async fn main() -> eyre::Result<()> {
     // Initialize network config
     let config = NetworkConfig::default();
 
-    // Detect signer type from environment and run the appropriate flow
-    if std::env::var("FORDEFI_JWT_TOKEN").is_ok() {
-        run_with_fordefi_signer(config).await
-    } else {
-        run_with_local_signer(config).await
-    }
-}
-
-async fn run_with_local_signer(config: NetworkConfig) -> eyre::Result<()> {
-    let private_key = std::env::var("PRIVATE_KEY").expect("PRIVATE_KEY must be set");
-    let signer = LocalSigner::from_private_key(&private_key, &config.rpc_url).await?;
-    let client = OstiumClient::new(signer, config).await?;
-
-    println!("\n========================================");
-    println!("       Ostium SDK Interactive CLI");
-    println!("        (Local Signer Mode)");
-    println!("========================================");
-    println!("Connected wallet: {}", client.address());
-
-    run_main_loop(&client).await
-}
-
-async fn run_with_fordefi_signer(config: NetworkConfig) -> eyre::Result<()> {
-    let jwt_token = std::env::var("FORDEFI_JWT_TOKEN").expect("FORDEFI_JWT_TOKEN must be set");
+    // Initialize Fordefi signer
+    let jwt_token = std::env::var("FORDEFI_JWT_TOKEN")
+        .expect("FORDEFI_JWT_TOKEN must be set");
 
     // Read private key from file (default: keys/pk.pem)
-    let key_path = std::env::var("FORDEFI_PRIVATE_KEY_PATH").unwrap_or_else(|_| "keys/pk.pem".to_string());
+    let key_path = std::env::var("FORDEFI_PRIVATE_KEY_PATH")
+        .unwrap_or_else(|_| "keys/pk.pem".to_string());
     let private_key_pem = std::fs::read_to_string(&key_path)
         .unwrap_or_else(|_| panic!("Failed to read private key from {}", key_path));
 
@@ -69,7 +51,7 @@ async fn run_with_fordefi_signer(config: NetworkConfig) -> eyre::Result<()> {
 
     println!("\n========================================");
     println!("       Ostium SDK Interactive CLI");
-    println!("        (Fordefi MPC Mode)");
+    println!("         (Fordefi MPC Wallet)");
     println!("========================================");
     println!("Connected wallet: {}", client.address());
 
@@ -83,8 +65,9 @@ async fn run_main_loop<S: TransactionSigner>(client: &OstiumClient<S>) -> eyre::
         println!("  1. Long BTC");
         println!("  2. Close position");
         println!("  3. Deposit to OLP vault");
-        println!("  4. Withdraw from OLP vault");
-        println!("  5. View info");
+        println!("  4. Withdraw (auto)");
+        println!("  5. Withdraw (manual)");
+        println!("  6. View info");
         println!("  q. Quit");
         println!("----------------------------------------");
 
@@ -99,8 +82,9 @@ async fn run_main_loop<S: TransactionSigner>(client: &OstiumClient<S>) -> eyre::
             "1" => long_btc_flow(client).await?,
             "2" => close_position_flow(client).await?,
             "3" => deposit_olp_flow(client).await?,
-            "4" => withdraw_olp_flow(client).await?,
-            "5" => view_info(client).await?,
+            "4" => auto_withdraw_flow(client).await?,
+            "5" => withdraw_olp_flow(client).await?,
+            "6" => view_info(client).await?,
             "q" | "Q" => {
                 println!("\nGoodbye!");
                 break;
@@ -553,6 +537,100 @@ async fn withdraw_olp_flow<S: ostium_sdk::TransactionSigner>(
     println!("\n--- Remaining OLP Position ---");
     println!("  Shares: {:.6} OLP", balance_after.shares_f64());
     println!("  Value: ${:.2} USDC", balance_after.value);
+
+    Ok(())
+}
+
+/// Auto withdraw - approve OLP tokens for the auto-withdraw contract
+async fn auto_withdraw_flow<S: ostium_sdk::TransactionSigner>(
+    client: &OstiumClient<S>,
+) -> eyre::Result<()> {
+    println!("\n=== Auto Withdraw (Approve OLP) ===");
+
+    // Check if vault and auto-withdraw are configured
+    if client.config().vault.is_none() {
+        println!("OLP Vault is not configured for this network.");
+        return Ok(());
+    }
+    if client.config().auto_withdraw.is_none() {
+        println!("Auto-withdraw contract is not configured for this network.");
+        return Ok(());
+    }
+
+    // Fetch OLP balance and current allowance in parallel
+    let (balance_result, allowance_result) = tokio::join!(
+        client.get_olp_balance(),
+        client.get_auto_withdraw_allowance()
+    );
+
+    let balance = match balance_result {
+        Ok(b) => b,
+        Err(e) => {
+            println!("Error getting OLP balance: {}", e);
+            return Ok(());
+        }
+    };
+
+    let current_allowance = match allowance_result {
+        Ok(a) => a,
+        Err(e) => {
+            println!("Error getting auto-withdraw allowance: {}", e);
+            return Ok(());
+        }
+    };
+
+    let shares_f64 = balance.shares_f64();
+    let allowance_f64: f64 = current_allowance.to_string().parse().unwrap_or(0.0) / 1e6;
+
+    println!("\n--- Current OLP Position ---");
+    println!("  Shares: {:.6} OLP", shares_f64);
+    println!("  Value: ${:.2} USDC", balance.value);
+
+    println!("\n--- Auto-Withdraw Contract ---");
+    println!("  Address: {:?}", client.config().auto_withdraw.unwrap());
+    println!("  Current Allowance: {:.6} OLP", allowance_f64);
+
+    if shares_f64 < 0.000001 {
+        println!("\nNo OLP balance to approve.");
+        return Ok(());
+    }
+
+    // Get approval amount
+    println!("\nHow many OLP shares to approve for auto-withdraw?");
+    print!("Amount (OLP shares) [0.01]: ");
+    io::stdout().flush()?;
+    let mut amount_input = String::new();
+    io::stdin().read_line(&mut amount_input)?;
+
+    let shares_to_approve: f64 = if amount_input.trim().is_empty() {
+        0.01
+    } else if amount_input.trim().to_lowercase() == "all" {
+        shares_f64
+    } else {
+        amount_input.trim().parse().unwrap_or(0.01)
+    };
+
+    // Convert to raw shares (6 decimals)
+    let shares_raw = alloy::primitives::U256::from((shares_to_approve * 1e6) as u128);
+
+    println!("\nApproving {:.6} OLP for auto-withdraw...", shares_to_approve);
+    let tx_hash = client.approve_auto_withdraw(shares_raw).await?;
+    println!("Transaction: {}", tx_hash);
+
+    let receipt = client.wait_for_receipt(tx_hash).await?;
+    if receipt.status() {
+        println!("Auto-withdraw approval successful!");
+    } else {
+        println!("Approval transaction reverted!");
+        return Ok(());
+    }
+
+    // Show updated allowance
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    let new_allowance = client.get_auto_withdraw_allowance().await?;
+    let new_allowance_f64: f64 = new_allowance.to_string().parse().unwrap_or(0.0) / 1e6;
+    println!("\n--- Updated Auto-Withdraw Allowance ---");
+    println!("  Allowance: {:.6} OLP", new_allowance_f64);
 
     Ok(())
 }

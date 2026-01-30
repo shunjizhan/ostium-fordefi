@@ -73,37 +73,6 @@ impl PlaceOrderParams {
         }
     }
 
-    /// Create a new limit order
-    pub fn limit(
-        pair_index: u16,
-        collateral: f64,
-        leverage: f64,
-        is_long: bool,
-        open_price: f64,
-    ) -> Self {
-        Self {
-            pair_index,
-            collateral,
-            leverage,
-            is_long,
-            order_type: OrderType::LimitOpen,
-            open_price: Some(open_price),
-            ..Default::default()
-        }
-    }
-
-    /// Set take profit price
-    pub fn with_take_profit(mut self, price: f64) -> Self {
-        self.take_profit = Some(price);
-        self
-    }
-
-    /// Set stop loss price
-    pub fn with_stop_loss(mut self, price: f64) -> Self {
-        self.stop_loss = Some(price);
-        self
-    }
-
     /// Set slippage tolerance
     pub fn with_slippage(mut self, slippage_percent: f64) -> Self {
         self.slippage = Some(slippage_percent);
@@ -196,22 +165,6 @@ impl CloseTradeParams {
             pair_index,
             trade_index,
             close_percentage: 100.0,
-            market_price,
-            slippage: Some(DEFAULT_SLIPPAGE),
-        }
-    }
-
-    /// Create params to close partial position
-    pub fn close_partial(
-        pair_index: u16,
-        trade_index: u8,
-        close_percentage: f64,
-        market_price: f64,
-    ) -> Self {
-        Self {
-            pair_index,
-            trade_index,
-            close_percentage,
             market_price,
             slippage: Some(DEFAULT_SLIPPAGE),
         }

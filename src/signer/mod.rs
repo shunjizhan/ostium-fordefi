@@ -1,14 +1,11 @@
 //! Transaction signer abstraction for Ostium SDK
 //!
-//! This module provides a trait-based abstraction for signing and sending transactions,
-//! allowing the SDK to work with both local private keys (Phase 1) and
-//! Fordefi MPC wallets (Phase 2).
+//! This module provides a trait-based abstraction for signing and sending transactions
+//! using Fordefi MPC wallets.
 
 mod fordefi;
-mod local;
 
 pub use fordefi::FordefiSigner;
-pub use local::LocalSigner;
 
 use alloy::primitives::{Address, Bytes, TxHash, U256};
 use alloy::rpc::types::TransactionReceipt;
@@ -53,9 +50,7 @@ impl TxRequest {
 
 /// Trait for signing and sending EVM transactions
 ///
-/// This abstraction allows the SDK to work with different signing mechanisms:
-/// - `LocalSigner`: Uses a local private key (Phase 1)
-/// - `FordefiSigner`: Uses Fordefi MPC API (Phase 2)
+/// This abstraction allows the SDK to work with Fordefi MPC signing.
 pub trait TransactionSigner: Send + Sync {
     /// Returns the signer's EVM address
     fn address(&self) -> Address;
