@@ -7,6 +7,7 @@ Rust SDK for interacting with the Ostium perpetuals protocol on Arbitrum One.
 - **Trading**: Open/close BTC long positions with configurable leverage
 - **OLP Vault**: Deposit USDC and withdraw from the OLP vault (ERC-4626)
 - **Position Management**: View and close open positions
+- **Dual Signer Support**: Local private key or Fordefi MPC wallet
 
 ## Prerequisites
 
@@ -29,11 +30,30 @@ cd ostium-fordefi
 cp .env.example .env
 ```
 
-3. Edit `.env` with your credentials:
+3. Configure your signer (choose one):
+
+### Option 1: Local Private Key
 ```
 ALCHEMY_API_KEY=your_alchemy_api_key
 PRIVATE_KEY=your_private_key_without_0x_prefix
 ```
+
+### Option 2: Fordefi MPC Wallet
+```
+ALCHEMY_API_KEY=your_alchemy_api_key
+FORDEFI_JWT_TOKEN=your_fordefi_jwt_token
+```
+
+Then place your Fordefi API user's P-256 private key in `keys/pk.pem`:
+```
+-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEI...
+-----END EC PRIVATE KEY-----
+```
+
+Optional environment variables for Fordefi:
+- `FORDEFI_PRIVATE_KEY_PATH` - Custom path to PEM file (default: `keys/pk.pem`)
+- `FORDEFI_ADDRESS` - Wallet address (auto-discovered if not set)
 
 ## Running the Example Flow
 
@@ -42,6 +62,10 @@ The `flow` example provides an interactive CLI for all SDK operations:
 ```bash
 cargo run --example flow
 ```
+
+The SDK automatically detects which signer to use based on environment variables:
+- If `FORDEFI_JWT_TOKEN` is set → Fordefi MPC mode
+- Otherwise → Local signer mode
 
 ### Menu Options
 
@@ -74,30 +98,63 @@ The OLP vault uses an epoch-based withdrawal system:
 
 ## SDK Usage
 
+### With Local Signer
+
 ```rust
-use ostium_sdk::{OstiumClient, NetworkConfig};
-use alloy::signers::local::PrivateKeySigner;
+use ostium_sdk::{OstiumClient, NetworkConfig, LocalSigner, PlaceOrderParams, get_btc_price};
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    // Load environment
     dotenvy::dotenv().ok();
 
-    // Create signer from private key
+    let config = NetworkConfig::default();
     let private_key = std::env::var("PRIVATE_KEY")?;
-    let signer: PrivateKeySigner = private_key.parse()?;
-
-    // Initialize client
-    let config = NetworkConfig::mainnet();
-    let client = OstiumClient::new(config, signer).await?;
+    let signer = LocalSigner::from_private_key(&private_key, &config.rpc_url).await?;
+    let client = OstiumClient::new(signer, config).await?;
 
     // Check balances
     let usdc = client.get_usdc_balance().await?;
     let olp = client.get_olp_balance().await?;
 
+    // Place a BTC long trade
+    let btc_price = get_btc_price().await?;
+    let params = PlaceOrderParams::market(0, 2.0, 10.0, true) // $2 collateral, 10x, long
+        .with_open_price(btc_price)
+        .with_slippage(2.0);
+    let tx_hash = client.place_order(params, None).await?;
+
     // Get open positions
     let positions = client.get_positions(None).await?;
 
+    Ok(())
+}
+```
+
+### With Fordefi MPC Signer
+
+```rust
+use ostium_sdk::{OstiumClient, NetworkConfig, FordefiSigner, PlaceOrderParams, get_btc_price};
+
+#[tokio::main]
+async fn main() -> eyre::Result<()> {
+    dotenvy::dotenv().ok();
+
+    let config = NetworkConfig::default();
+    let jwt_token = std::env::var("FORDEFI_JWT_TOKEN")?;
+    let private_key_pem = std::fs::read_to_string("keys/pk.pem")?;
+
+    // Auto-discover vault address from Fordefi
+    let signer = FordefiSigner::discover(&jwt_token, &private_key_pem, &config.rpc_url).await?;
+    let client = OstiumClient::new(signer, config).await?;
+
+    // Place a BTC long trade via Fordefi MPC
+    let btc_price = get_btc_price().await?;
+    let params = PlaceOrderParams::market(0, 2.0, 10.0, true)
+        .with_open_price(btc_price)
+        .with_slippage(2.0);
+    let tx_hash = client.place_order(params, None).await?;
+
+    println!("Trade placed: {}", tx_hash);
     Ok(())
 }
 ```

@@ -23,4 +23,5 @@ target
 ostium-python-sdk/
 web3-provider/
 .env
+keys/
 

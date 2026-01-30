@@ -133,8 +133,8 @@ impl<S: TransactionSigner> OstiumClient<S> {
             .context("Failed to decode allowance")?;
 
         if decoded < amount {
-            // Approve max uint256 for convenience
-            self.approve_token(self.config.usdc, spender, U256::MAX)
+            // Approve only the exact amount needed
+            self.approve_token(self.config.usdc, spender, amount)
                 .await?;
         }
 

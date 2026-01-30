@@ -1,14 +1,16 @@
 //! Interactive CLI for Ostium SDK
 //!
-//! Run with: cargo run --example interactive
+//! Run with: cargo run --example flow
 //!
-//! Requires PRIVATE_KEY environment variable
+//! Environment variables:
+//! - For local signer: PRIVATE_KEY
+//! - For Fordefi signer: FORDEFI_JWT_TOKEN, FORDEFI_PRIVATE_KEY, FORDEFI_ADDRESS
 
 use std::io::{self, Write};
 
 use ostium_sdk::{
-    get_btc_price, get_eth_price, CloseTradeParams, DepositParams, LocalSigner, NetworkConfig,
-    OstiumClient, PlaceOrderParams, Position,
+    get_btc_price, get_eth_price, CloseTradeParams, DepositParams, FordefiSigner, LocalSigner,
+    NetworkConfig, OstiumClient, PlaceOrderParams, Position, TransactionSigner,
 };
 
 #[tokio::main]
@@ -17,20 +19,64 @@ async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
-    // Get private key from env
-    let private_key = std::env::var("PRIVATE_KEY").expect("PRIVATE_KEY must be set");
-
-    // Initialize client
+    // Initialize network config
     let config = NetworkConfig::default();
+
+    // Detect signer type from environment and run the appropriate flow
+    if std::env::var("FORDEFI_JWT_TOKEN").is_ok() {
+        run_with_fordefi_signer(config).await
+    } else {
+        run_with_local_signer(config).await
+    }
+}
+
+async fn run_with_local_signer(config: NetworkConfig) -> eyre::Result<()> {
+    let private_key = std::env::var("PRIVATE_KEY").expect("PRIVATE_KEY must be set");
     let signer = LocalSigner::from_private_key(&private_key, &config.rpc_url).await?;
-    let client = OstiumClient::new(signer, config.clone()).await?;
+    let client = OstiumClient::new(signer, config).await?;
 
     println!("\n========================================");
     println!("       Ostium SDK Interactive CLI");
+    println!("        (Local Signer Mode)");
     println!("========================================");
     println!("Connected wallet: {}", client.address());
 
-    // Main loop
+    run_main_loop(&client).await
+}
+
+async fn run_with_fordefi_signer(config: NetworkConfig) -> eyre::Result<()> {
+    let jwt_token = std::env::var("FORDEFI_JWT_TOKEN").expect("FORDEFI_JWT_TOKEN must be set");
+
+    // Read private key from file (default: keys/pk.pem)
+    let key_path = std::env::var("FORDEFI_PRIVATE_KEY_PATH").unwrap_or_else(|_| "keys/pk.pem".to_string());
+    let private_key_pem = std::fs::read_to_string(&key_path)
+        .unwrap_or_else(|_| panic!("Failed to read private key from {}", key_path));
+
+    println!("\nInitializing Fordefi signer...");
+
+    // Use provided address or auto-discover
+    let signer = if let Ok(address_str) = std::env::var("FORDEFI_ADDRESS") {
+        let address: alloy::primitives::Address = address_str
+            .parse()
+            .expect("FORDEFI_ADDRESS must be a valid address");
+        FordefiSigner::new(&jwt_token, &private_key_pem, address, &config.rpc_url).await?
+    } else {
+        println!("FORDEFI_ADDRESS not set, discovering vault...");
+        FordefiSigner::discover(&jwt_token, &private_key_pem, &config.rpc_url).await?
+    };
+
+    let client = OstiumClient::new(signer, config).await?;
+
+    println!("\n========================================");
+    println!("       Ostium SDK Interactive CLI");
+    println!("        (Fordefi MPC Mode)");
+    println!("========================================");
+    println!("Connected wallet: {}", client.address());
+
+    run_main_loop(&client).await
+}
+
+async fn run_main_loop<S: TransactionSigner>(client: &OstiumClient<S>) -> eyre::Result<()> {
     loop {
         println!("\n----------------------------------------");
         println!("Select an option:");
@@ -50,11 +96,11 @@ async fn main() -> eyre::Result<()> {
         let choice = input.trim();
 
         match choice {
-            "1" => long_btc_flow(&client).await?,
-            "2" => close_position_flow(&client).await?,
-            "3" => deposit_olp_flow(&client).await?,
-            "4" => withdraw_olp_flow(&client).await?,
-            "5" => view_info(&client).await?,
+            "1" => long_btc_flow(client).await?,
+            "2" => close_position_flow(client).await?,
+            "3" => deposit_olp_flow(client).await?,
+            "4" => withdraw_olp_flow(client).await?,
+            "5" => view_info(client).await?,
             "q" | "Q" => {
                 println!("\nGoodbye!");
                 break;

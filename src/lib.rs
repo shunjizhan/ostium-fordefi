@@ -47,7 +47,7 @@ pub use client::OstiumClient;
 pub use config::{FordefiConfig, NetworkConfig};
 pub use error::{eyre, Context, Report, Result};
 pub use price::{get_btc_price, get_eth_price, get_price};
-pub use signer::{LocalSigner, TransactionSigner, TxRequest};
+pub use signer::{FordefiSigner, LocalSigner, TransactionSigner, TxRequest};
 pub use subgraph::{OpenTrade, SubgraphClient};
 pub use types::{
     BuilderFeeParams, CloseTradeParams, DepositParams, PlaceOrderParams, Position, RedeemParams,

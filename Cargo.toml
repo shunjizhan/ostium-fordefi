@@ -25,8 +25,10 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 eyre = "0.6"
 
 # Fordefi signing (P-256 ECDSA)
-p256 = { version = "0.13", features = ["pem", "ecdsa"] }
+p256 = { version = "0.13", features = ["pem", "ecdsa", "pkcs8"] }
+sec1 = { version = "0.7", features = ["pem"] }
 base64 = "0.22"
+hex = "0.4"
 
 # Logging
 tracing = "0.1"
@@ -38,18 +40,6 @@ futures = { version = "0.3.31", default-features = false, features = ["alloc"] }
 [dev-dependencies]
 tokio-test = "0.4"
 tracing-subscriber = "0.3"
-
-[[example]]
-name = "test_sdk"
-path = "examples/test_sdk.rs"
-
-[[example]]
-name = "place_trade"
-path = "examples/place_trade.rs"
-
-[[example]]
-name = "vault_deposit"
-path = "examples/vault_deposit.rs"
 
 [[example]]
 name = "flow"

@@ -4,8 +4,10 @@
 //! allowing the SDK to work with both local private keys (Phase 1) and
 //! Fordefi MPC wallets (Phase 2).
 
+mod fordefi;
 mod local;
 
+pub use fordefi::FordefiSigner;
 pub use local::LocalSigner;
 
 use alloy::primitives::{Address, Bytes, TxHash, U256};
